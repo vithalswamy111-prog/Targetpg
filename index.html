@@ -799,7 +799,7 @@ async function boot(){
 }
 async function loadProfile(){
   const email = S.session.user.email;
-  const isAdminEmail = email === ADMIN_EMAIL;
+  const isAdminEmail = (email||'').trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
   let { data } = await sb.from('profiles').select('*').eq('id', S.session.user.id).maybeSingle();
   if(!data){
     const ins = await sb.from('profiles').upsert({
