@@ -888,8 +888,22 @@ function render(){
   // view)" should keep seeing the user-side screens as navigation happens
   // (e.g. via goTo/back), not get bounced back to the admin panel just
   // because their account role is admin.
-  if(S.profile?.role==='admin' && S.view!=='user') return renderAdmin();
-  return renderUser();
+  const showCrash = (e)=>{
+    // Surface the real crash on-screen (with a copy button) instead of a
+    // silent blank page — this is what makes debugging from a phone possible.
+    console.error('[render crash]', e);
+    app.innerHTML = `<div class="container"><div class="card">
+      <h3 style="color:var(--red);">Something crashed while loading this page</h3>
+      <p class="muted">Screenshot this and send it — it tells us exactly what broke:</p>
+      <pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:10px;font-size:12px;color:var(--red);">${escapeHtml(String(e && e.stack || e))}</pre>
+      <button class="ghost" id="retryRender" style="margin-top:10px;">Reload</button>
+    </div></div>`;
+    const rb = document.getElementById('retryRender'); if(rb) rb.onclick = ()=>render();
+  };
+  try{
+    const p = (S.profile?.role==='admin' && S.view!=='user') ? renderAdmin() : renderUser();
+    if(p && typeof p.catch==='function') p.catch(showCrash);
+  }catch(e){ showCrash(e); }
 }
 
 function topbar(title, right=''){
@@ -1125,6 +1139,17 @@ function renderAuth(){
 
 // ================= USER SIDE =================
 async function renderUser(){
+  if(!S.profile){
+    // Profile hasn't loaded yet (or failed to load) — show a retry screen
+    // instead of a silent blank page.
+    app.innerHTML = `<div class="container"><div class="card">
+      <h3>Couldn't load your profile</h3>
+      <p class="muted">This can happen right after signup/login while your account is still being set up. Try reloading.</p>
+      <button class="primary" id="retryLoad">Reload</button>
+    </div></div>`;
+    document.getElementById('retryLoad').onclick = async ()=>{ await loadProfile(); render(); };
+    return;
+  }
   S.utab = S.utab || 'qbanks';
   const adminBackBtn = S.profile?.role==='admin' ? `<button class="primary" id="backToAdminBtn" style="padding:8px 12px;font-size:12px;">← Back to Admin</button>` : '';
   app.innerHTML = topbar('QBank Console', adminBackBtn);
