@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/profiles/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.role == 'admin';
+    }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // ---- profiles ----
+    // Anyone signed in can read profiles (needed for rank lists showing
+    // names). Users can create/update their own doc but can't grant
+    // themselves admin or flip their own status — only an admin can.
+    match /profiles/{uid} {
+      allow read: if signedIn();
+      allow create: if isOwner(uid)
+        && request.resource.data.role == 'user'
+        && request.resource.data.status == 'pending';
+      allow update: if isAdmin() || (
+        isOwner(uid)
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ---- static content: qbanks/folders/sets/questions ----
+    // Read-only for signed-in users; only the admin writes content. Custom
+    // sets (sets with a non-null user_id, set_type 'custom'/'category')
+    // are created by the owning user themselves.
+    match /qbanks/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /folders/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /questions/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /sets/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (signedIn() && request.resource.data.user_id == request.auth.uid);
+      allow update: if isAdmin() || (signedIn() && resource.data.user_id == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    // ---- attempts ----
+    // A user only ever reads/writes their own attempts directly. Rank-list
+    // RPCs (folder_rank_stats etc.) need to read attempts across many
+    // users to compute standings — allowed broadly to any signed-in user
+    // here since there's no backend to run them as a trusted service; the
+    // data they contain (score/correct-count) is what the leaderboards
+    // already surface anyway.
+    match /attempts/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.resource.data.user_id == request.auth.uid;
+      allow delete: if signedIn() && resource.data.user_id == request.auth.uid;
+    }
+
+    // ---- per-question community accuracy counters ----
+    match /question_stats/{qid} {
+      allow read: if signedIn();
+      allow write: if signedIn();
+    }
+
+    // ---- devices ----
+    match /devices/{id} {
+      allow read, create, update, delete: if isAdmin() || (signedIn() && resource == null ? request.resource.data.user_id == request.auth.uid : resource.data.user_id == request.auth.uid);
+    }
+
+    // ---- categorizations (a user's own mistake-tags) ----
+    match /categorizations/{id} {
+      allow read, create, update, delete: if isAdmin() || (signedIn() && (resource == null ? request.resource.data.user_id == request.auth.uid : resource.data.user_id == request.auth.uid));
+    }
+
+    // ---- coupons ----
+    // Read is open (needed to look up a code by value). Only the
+    // promoter/admin can create; usage_count/milestone updates happen from
+    // whichever user redeems the code, restricted to just those fields.
+    match /coupons/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || (signedIn() && request.resource.data.promoter_id == request.auth.uid);
+      allow update: if isAdmin() || (signedIn() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usage_count','milestone_reached']));
+      allow delete: if isAdmin();
+    }
+
+    // ---- payments ----
+    match /payments/{id} {
+      allow read: if isAdmin() || (signedIn() && resource.data.user_id == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.user_id == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- plans ----
+    match /plans/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+
+    // ---- feedback / question queries ----
+    match /app_feedback/{id} {
+      allow read: if isAdmin() || (signedIn() && resource.data.user_id == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.user_id == request.auth.uid;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+    match /question_queries/{id} {
+      allow read: if isAdmin() || (signedIn() && resource.data.user_id == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.user_id == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+  }
+}
