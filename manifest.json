@@ -2,7 +2,7 @@
   "name": "QBank Console",
   "short_name": "QBank",
   "description": "CBT-style practice for NEET PG / INICET",
-  "start_url": "./index2.html",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
