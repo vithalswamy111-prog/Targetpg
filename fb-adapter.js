@@ -57,6 +57,14 @@ function wrapErr(e){ return { message: e?.message || String(e), code: e?.code };
 // ---------- auth ----------
 const auth = {
   async getSession(){
+    // On a fresh page load, fbAuth.currentUser is null for a brief moment
+    // even for an already-logged-in user — Firebase hasn't finished
+    // restoring the persisted session from storage yet. Without waiting
+    // here, boot() sees "no session", flashes the login screen, then the
+    // real session arrives a beat later and the page flips over. Waiting
+    // on authStateReady() makes this call reflect the real logged-in/out
+    // state on the very first check, so no flash happens.
+    try{ await fbAuth.authStateReady(); }catch(e){}
     return { data: { session: toSession(fbAuth.currentUser) } };
   },
   onAuthStateChange(cb){
