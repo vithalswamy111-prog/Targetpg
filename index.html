@@ -891,11 +891,14 @@ function render(){
   const showCrash = (e)=>{
     // Surface the real crash on-screen (with a copy button) instead of a
     // silent blank page — this is what makes debugging from a phone possible.
+    // The raw stack trace is only shown to the admin account; students just
+    // get a plain "something went wrong" message.
     console.error('[render crash]', e);
+    const isAdminAcct = S.profile?.role==='admin';
     app.innerHTML = `<div class="container"><div class="card">
-      <h3 style="color:var(--red);">Something crashed while loading this page</h3>
-      <p class="muted">Screenshot this and send it — it tells us exactly what broke:</p>
-      <pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:10px;font-size:12px;color:var(--red);">${escapeHtml(String(e && e.stack || e))}</pre>
+      <h3 style="color:var(--red);">Something went wrong loading this page</h3>
+      <p class="muted">${isAdminAcct ? 'Screenshot this and send it — it tells us exactly what broke:' : "Please try reloading. If it keeps happening, use the Feedback tab to let us know."}</p>
+      ${isAdminAcct ? `<pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:10px;font-size:12px;color:var(--red);">${escapeHtml(String(e && e.stack || e))}</pre>` : ''}
       <button class="ghost" id="retryRender" style="margin-top:10px;">Reload</button>
     </div></div>`;
     const rb = document.getElementById('retryRender'); if(rb) rb.onclick = ()=>render();
@@ -4213,7 +4216,11 @@ async function adminPlans(){
     const price=+document.getElementById('pPrice').value;
     const days=+document.getElementById('pDays').value;
     if(!name||!price||!days){ toast('Fill all plan fields'); return; }
-    await sb.from('plans').insert({name, price, duration_days:days});
+    // Firestore's orderBy(field) only returns docs that actually HAVE that
+    // field — a plan inserted without display_order would silently vanish
+    // from every listing that orders by it (looked like "add" did nothing).
+    const { error } = await sb.from('plans').insert({name, price, duration_days:days, display_order:(plans||[]).length});
+    if(error){ toast('Could not add plan: '+error.message); return; }
     adminPlans();
   };
   body.querySelectorAll('.delBtn').forEach(b=>b.onclick=async ()=>{ await sb.from('plans').delete().eq('id', b.dataset.id); adminPlans(); });
