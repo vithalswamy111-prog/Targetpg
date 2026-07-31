@@ -320,6 +320,63 @@ th{color:var(--text-dim);font-weight:600;font-size:12px;text-transform:uppercase
 <script type="module">
 import { sb, bumpQuestionStats } from './fb-adapter.js';
 
+// =====================================================================
+// FILE MAP / TABLE OF CONTENTS
+// One big module script by design (state `S` below is shared by every
+// section via closures — splitting into real ES modules would mean
+// passing S around everywhere). Instead, each section is fenced with a
+// "================= NAME =================" banner comment so you can
+// jump straight to it — search for the banner text (not the line number,
+// which will drift as the file changes) in your editor.
+//
+//   CORE / UTILITIES        — helpers used by every section below:
+//                             fetchAllRows, verifyAdminSession, folder
+//                             name parsing (folderGroupOf/nameParts/...),
+//                             naturalCompare, detectSubject/examType/
+//                             platform, theme, subject icons, streak,
+//                             completion animation, empty-state markup,
+//                             in-app back-nav (snapshotState/goTo), toast,
+//                             device id, fmtTime/escapeHtml/sanitizeInput,
+//                             custom-select widget (renderCselHtml/...),
+//                             rich-text + inline-image rendering
+//   BOOT                     — boot(), loadProfile(), session bootstrap
+//   ANNOUNCEMENT BANNER      — loadAnnouncement()/announcementBannerHtml()
+//                             (site-wide banner; the admin-side poster UI
+//                             is in the "ADMIN ANNOUNCEMENT" section)
+//   EXPIRY WATCHER / DEVICE  — startExpiryWatcher(), registerDevice()
+//   RENDER DISPATCHER        — render(), topbar(), bindTopbar(), signOut()
+//   EDIT PROFILE             — user-side profile-edit modal
+//   AUTH                     — renderAuth() (login/signup/reset screen)
+//   USER SIDE                — renderUser() and everything under the
+//                             logged-in learner's tabs: qbank/category/
+//                             folder/set navigation, stats, decks, custom
+//                             test builder, results, subscription
+//   FEEDBACK (user side)     — loadFeedbackTab()
+//   EXAM + REVIEW            — startAttempt/renderExam/submitAttempt/
+//                             renderReview, question-query (doubt) modal,
+//                             screenshot capture
+//   ADMIN SIDE               — renderAdmin() tab dispatcher, then one
+//                             section per admin tab, each fenced the
+//                             same way:
+//                               · ADMIN ANNOUNCEMENT   (📢 Announce tab)
+//                               · adminUpload()        (Upload tab)
+//                               · adminFolders()       (Sections tab)
+//                               · Manage tab           (move/delete
+//                                 sections, hand-edit a generated set)
+//                               · adminUsers()         (Users tab) +
+//                                 UNIFIED USER MODAL + adminPlans() +
+//                                 coupon helpers
+//                               · ADMIN FEEDBACK
+//                               · ADMIN RANKINGS (shared EXAMTYPE_RANK_LABELS
+//                                 constant, then QUESTION QUERIES admin-
+//                                 review UI, then the rankings UI itself —
+//                                 all three physically grouped together)
+//
+// To add a new admin tab: add it to the tab-bar markup in renderAdmin(),
+// add a case in its dispatcher, and drop your new `async function
+// adminYourTab(){...}` in with a matching banner comment above it.
+// =====================================================================
+
 const ADMIN_EMAIL = 'abhivanshsomvanshi@gmail.com';
 const UPI_ID = '9145891969@ptyes';
 const UPI_PAYEE_NAME = 'NeetPG QBank';
@@ -4463,6 +4520,9 @@ async function adminFeedback(){
 }
 
 // ================= ADMIN RANKINGS =================
+// (adminRankings() itself is further below — this constant is declared
+// here because the Question Queries admin-review UI right after it also
+// shares this file region; the actual rankings render function follows.)
 const EXAMTYPE_RANK_LABELS = {
   auto_subsection: 'Grand Tests (GT)',
   inicet: 'INICET',
