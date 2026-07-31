@@ -52,7 +52,7 @@ function toSession(user){
   if(!user) return null;
   return { user: { id: user.uid, email: user.email } };
 }
-function wrapErr(e){ return { message: e?.message || String(e), code: e?.code }; }
+function wrapErr(e){ return { message: e?.message || String(e), code: e?.code, stack: e?.stack }; }
 
 // ---------- auth ----------
 const auth = {

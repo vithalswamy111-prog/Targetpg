@@ -6,6 +6,19 @@
 <title>QBank Console</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0B1220">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="96x96" href="icons/favicon.png">
+<!-- iOS: Safari ignores manifest.json for "Add to Home Screen", these tags are what make it installable/standalone there -->
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="QBank">
+<!-- Android/Chrome standalone hint (in addition to manifest.json's display:standalone) -->
+<meta name="mobile-web-app-capable" content="yes">
+<!-- Windows/Edge tile metadata for pinning to Start -->
+<meta name="msapplication-TileColor" content="#0B1220">
+<meta name="msapplication-TileImage" content="icons/icon-144.png">
+<meta name="msapplication-config" content="none">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -93,6 +106,11 @@ select{cursor:pointer;}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--amber);box-shadow:0 0 0 3px rgba(239,165,62,.15);}
 label{font-size:12.5px;color:var(--text-dim);display:block;margin:11px 0 5px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;}
 .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border-soft);position:sticky;top:0;background:color-mix(in srgb, var(--surface) 88%, transparent);backdrop-filter:blur(10px);z-index:50;box-shadow:var(--shadow-sm);}
+.announce-banner{display:flex;align-items:center;justify-content:center;gap:14px;padding:12px 20px;background:linear-gradient(90deg, var(--amber), var(--amber-2));color:#1A1200;font-weight:700;font-size:14.5px;line-height:1.4;text-align:center;position:sticky;top:0;z-index:49;box-shadow:0 2px 10px rgba(0,0,0,.22);}
+.announce-banner .announce-text{flex:1;max-width:900px;}
+.announce-banner .announce-x{background:rgba(0,0,0,.12);border:none;color:#1A1200;font-weight:700;font-size:14px;line-height:1;cursor:pointer;padding:6px 9px;border-radius:8px;flex-shrink:0;}
+.announce-banner .announce-x:hover{background:rgba(0,0,0,.22);}
+@media (max-width:560px){.announce-banner{font-size:13px;padding:10px 14px;gap:8px;}}
 .brand{font-family:var(--display);font-weight:700;font-size:20.5px;letter-spacing:.01em;display:flex;align-items:center;gap:9px;}
 .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--amber);box-shadow:0 0 10px var(--amber), 0 0 2px var(--amber);position:relative;animation:dotPulse 2.4s ease-in-out infinite;}
 @keyframes dotPulse{0%,100%{box-shadow:0 0 8px var(--amber), 0 0 2px var(--amber);}50%{box-shadow:0 0 16px var(--amber), 0 0 4px var(--amber);}}
@@ -491,7 +509,7 @@ function categoryOf(f){
   return 'Other';
 }
 
-let S = { session:null, profile:null, deviceId:null, view:'loading', nav:{}, instructionsAcked:{} };
+let S = { session:null, profile:null, deviceId:null, view:'loading', nav:{}, instructionsAcked:{}, announcement:null };
 
 // ---------- theme (dark / light) ----------
 function applyTheme(){
@@ -780,8 +798,11 @@ async function boot(){
   S.deviceId = getDeviceId();
   const { data:{ session } } = await sb.auth.getSession();
   S.session = session;
-  if(session){ await loadProfile(); }
+  await Promise.all([ session ? loadProfile() : Promise.resolve(), loadAnnouncement() ]);
+  const shortcut = new URLSearchParams(location.search).get('shortcut');
+  if(shortcut && S.profile && S.profile.role!=='admin'){ S.utab = shortcut; }
   render();
+  startAnnouncementWatcher();
   sb.auth.onAuthStateChange((event, sess)=>{
     // Any of these events can re-fire for the SAME already-signed-in user
     // whenever the tab regains focus — which happens the instant the native
@@ -836,6 +857,52 @@ async function loadProfile(){
 // revoking/deleting them while they're mid-session) also forces a sign-out,
 // not just the check done at login.
 let expiryWatcherHandle = null;
+
+// ---------- announcement banner ----------
+// Single fixed Firestore doc (app_config/announcement) an admin can post a
+// one-line message to; every logged-in user sees it as a bold banner at the
+// top of the app until they dismiss it or the admin clears it.
+async function loadAnnouncement(){
+  try{
+    const { data, error } = await sb.from('app_config').select('*').eq('id','announcement').maybeSingle();
+    S.announcement = (!error && data && data.active && data.text) ? data : null;
+  }catch(e){ S.announcement = null; }
+}
+function announcementDismissedText(){
+  try{ return localStorage.getItem('qb_announce_dismissed') || ''; }catch(e){ return ''; }
+}
+function announcementBannerHtml(){
+  if(!S.announcement || !S.announcement.text) return '';
+  if(announcementDismissedText() === S.announcement.text) return '';
+  return `<div class="announce-banner" id="announceBanner">
+    <span class="announce-text">📢 ${escapeHtml(S.announcement.text)}</span>
+    <button class="announce-x" id="announceDismiss" title="Dismiss">✕</button>
+  </div>`;
+}
+function bindAnnouncementBanner(){
+  const b = document.getElementById('announceDismiss');
+  if(!b) return;
+  b.onclick = ()=>{
+    try{ localStorage.setItem('qb_announce_dismissed', S.announcement.text); }catch(e){}
+    const el = document.getElementById('announceBanner'); if(el) el.remove();
+  };
+}
+// Polls for a new/cleared announcement every couple of minutes so it shows
+// up (or disappears) for users already mid-session, without needing a full
+// page reload. Only touches the DOM if a banner host is actually on screen
+// right now (exam/review screens render outside renderUser() and have none).
+let announceWatcherHandle = null;
+function startAnnouncementWatcher(){
+  if(announceWatcherHandle) return;
+  announceWatcherHandle = setInterval(async ()=>{
+    if(!document.getElementById('announceBannerHost')) return;
+    await loadAnnouncement();
+    const host = document.getElementById('announceBannerHost');
+    if(!host) return;
+    host.innerHTML = announcementBannerHtml();
+    bindAnnouncementBanner();
+  }, 90000);
+}
 function startExpiryWatcher(){
   if(expiryWatcherHandle) return;
   expiryWatcherHandle = setInterval(async ()=>{
@@ -895,10 +962,22 @@ function render(){
     // get a plain "something went wrong" message.
     console.error('[render crash]', e);
     const isAdminAcct = S.profile?.role==='admin';
+    let crashDetail;
+    if(e && e.stack){
+      crashDetail = String(e.stack);
+    } else if(e && typeof e==='object'){
+      // Supabase/Postgrest errors are plain objects (no .stack) — pull out
+      // the useful fields instead of letting String(e) collapse to
+      // "[object Object]".
+      const parts = ['message','details','hint','code'].filter(k=>e[k]!=null).map(k=>`${k}: ${e[k]}`);
+      crashDetail = parts.length ? parts.join('\n') : (()=>{ try{ return JSON.stringify(e, null, 2); }catch(_){ return String(e); } })();
+    } else {
+      crashDetail = String(e);
+    }
     app.innerHTML = `<div class="container"><div class="card">
       <h3 style="color:var(--red);">Something went wrong loading this page</h3>
       <p class="muted">${isAdminAcct ? 'Screenshot this and send it — it tells us exactly what broke:' : "Please try reloading. If it keeps happening, use the Feedback tab to let us know."}</p>
-      ${isAdminAcct ? `<pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:10px;font-size:12px;color:var(--red);">${escapeHtml(String(e && e.stack || e))}</pre>` : ''}
+      ${isAdminAcct ? `<pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:10px;font-size:12px;color:var(--red);">${escapeHtml(crashDetail)}</pre>` : ''}
       <button class="ghost" id="retryRender" style="margin-top:10px;">Reload</button>
     </div></div>`;
     const rb = document.getElementById('retryRender'); if(rb) rb.onclick = ()=>render();
@@ -1155,8 +1234,9 @@ async function renderUser(){
   }
   S.utab = S.utab || 'qbanks';
   const adminBackBtn = S.profile?.role==='admin' ? `<button class="primary" id="backToAdminBtn" style="padding:8px 12px;font-size:12px;">← Back to Admin</button>` : '';
-  app.innerHTML = topbar('QBank Console', adminBackBtn);
+  app.innerHTML = topbar('QBank Console', adminBackBtn) + `<div id="announceBannerHost">${announcementBannerHtml()}</div>`;
   bindTopbar();
+  bindAnnouncementBanner();
   if(document.getElementById('backToAdminBtn')) document.getElementById('backToAdminBtn').onclick = ()=>{ goTo({view:'admin', atab:'upload'}); };
   const wrap = document.createElement('div'); wrap.className='container';
   app.appendChild(wrap);
@@ -2782,11 +2862,13 @@ render = function(){
 async function renderAdmin(){
   S.atab = S.atab || 'upload';
   if(S.atab==='coupons') S.atab = 'users'; // old standalone Coupons tab was removed — coupon management now lives inside each user's profile
-  app.innerHTML = topbar('QBank Console · Admin');
+  app.innerHTML = topbar('QBank Console · Admin') + `<div id="announceBannerHost">${announcementBannerHtml()}</div>`;
   bindTopbar();
+  bindAnnouncementBanner();
   const wrap=document.createElement('div'); wrap.className='container'; app.appendChild(wrap);
   wrap.innerHTML = `<div class="tabs">
     <div class="tab ${S.atab==='upload'?'on':''}" data-t="upload">Upload</div>
+    <div class="tab ${S.atab==='announce'?'on':''}" data-t="announce">📢 Announce</div>
     <div class="tab ${S.atab==='folders'?'on':''}" data-t="folders">Sections</div>
     <div class="tab ${S.atab==='manage'?'on':''}" data-t="manage">Manage</div>
     <div class="tab ${S.atab==='users'?'on':''}" data-t="users">Users</div>
@@ -2798,6 +2880,7 @@ async function renderAdmin(){
   </div><div id="atabBody"></div>`;
   wrap.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{ if(t.dataset.t===S.atab) return; goTo({atab:t.dataset.t}); });
   if(S.atab==='upload') return adminUpload();
+  if(S.atab==='announce') return adminAnnounce();
   if(S.atab==='folders') return adminFolders();
   if(S.atab==='manage') return adminManage();
   if(S.atab==='users') return adminUsers();
@@ -2814,6 +2897,51 @@ function prettifyName(filename){
   return n.replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 }
 
+// ================= ADMIN ANNOUNCEMENT =================
+async function adminAnnounce(){
+  const body = document.getElementById('atabBody');
+  body.innerHTML = `<div class="card muted">Loading…</div>`;
+  const { data, error } = await sb.from('app_config').select('*').eq('id','announcement').maybeSingle();
+  if(error){
+    body.innerHTML = `<div class="card"><h3>📢 Announcement</h3><p class="muted" style="color:var(--red);">Couldn't load — ${escapeHtml(error.message||'unknown error')}.</p></div>`;
+    return;
+  }
+  const current = (data && data.text) ? data.text : '';
+  const isLive = !!(data && data.active && data.text);
+  body.innerHTML = `<div class="card">
+    <h3>📢 Announcement banner</h3>
+    <p class="muted">One line, shown bold at the top of every student's screen (and yours) until you clear it or they dismiss it.</p>
+    ${isLive ? `<div class="card" style="border-color:var(--amber);background:var(--amber-dim);margin:12px 0;padding:12px 14px;"><b>Currently live:</b> ${escapeHtml(current)}</div>` : `<p class="muted" style="margin:10px 0;">Nothing is live right now.</p>`}
+    <label>Announcement text</label>
+    <input id="annText" maxlength="200" placeholder="e.g. New GT-15 is live now! 🎯" value="${escapeHtml(current).replace(/"/g,'&quot;')}">
+    <div class="muted" style="font-size:12px;margin-top:4px;">Keep it short — one line works best on small screens.</div>
+    <div class="row" style="margin-top:14px;gap:10px;">
+      <button class="primary" id="annSave">Post announcement</button>
+      ${isLive ? `<button class="danger" id="annClear">Clear announcement</button>` : ''}
+    </div>
+    <div id="annStatus" class="muted" style="margin-top:10px;"></div>
+  </div>`;
+  document.getElementById('annSave').onclick = async ()=>{
+    const text = sanitizeInput(document.getElementById('annText').value, 200);
+    const statusEl = document.getElementById('annStatus');
+    if(!text){ statusEl.textContent = 'Type something first.'; statusEl.style.color = 'var(--red)'; return; }
+    statusEl.textContent = 'Posting…'; statusEl.style.color = '';
+    const { error: e1 } = await sb.from('app_config').upsert({ id:'announcement', text, active:true, updated_at: new Date().toISOString(), posted_by: S.profile.id }, {onConflict:'id'});
+    if(e1){ statusEl.textContent = 'Failed: '+(e1.message||'unknown error'); statusEl.style.color = 'var(--red)'; return; }
+    toast('Announcement posted');
+    await loadAnnouncement();
+    adminAnnounce();
+  };
+  const clearBtn = document.getElementById('annClear');
+  if(clearBtn) clearBtn.onclick = async ()=>{
+    if(!confirm('Remove the live announcement banner for everyone?')) return;
+    const { error: e1 } = await sb.from('app_config').upsert({ id:'announcement', active:false }, {onConflict:'id'});
+    if(e1){ toast('Failed: '+(e1.message||'unknown error')); return; }
+    toast('Announcement cleared');
+    await loadAnnouncement();
+    adminAnnounce();
+  };
+}
 async function adminUpload(){
   const body=document.getElementById('atabBody');
   const { data: qbanks } = await sb.from('qbanks').select('*').order('created_at',{ascending:false});
@@ -4419,8 +4547,16 @@ async function adminQueries(){
 }
 async function adminRankings(){
   const body=document.getElementById('atabBody');
-  const { data: qbanks } = await sb.from('qbanks').select('*').order('created_at',{ascending:false});
-  S.rankQb = S.rankQb || (qbanks && qbanks[0] && qbanks[0].id);
+  const { data: qbanks, error: qbErr } = await sb.from('qbanks').select('*').order('created_at',{ascending:false});
+  if(qbErr){
+    body.innerHTML = `<div class="card"><h3>Rankings</h3><p class="muted" style="color:var(--red);">Couldn't load qbanks — ${escapeHtml(qbErr.message||'unknown error')}.</p></div>`;
+    return;
+  }
+  if(!qbanks || !qbanks.length){
+    body.innerHTML = `<div class="card"><h3>Rankings</h3><p class="muted">No qbanks yet — create a qbank first, then rankings will show up here.</p></div>`;
+    return;
+  }
+  S.rankQb = (S.rankQb && qbanks.some(qb=>qb.id===S.rankQb)) ? S.rankQb : qbanks[0].id;
   body.innerHTML = `
   <div class="card">
     <h3>Per set / per subject / per section</h3>

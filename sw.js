@@ -1,51 +1,59 @@
-// Minimal app-shell service worker: caches the static shell so the app
-// still opens (and shows cached data-free UI) offline, while all real data
-// (Firestore/Cloudinary/Firebase Auth) always goes over the network as
-// normal — this only ever intercepts requests for files that live on this
-// same origin (index2.html, manifest.json, icons), never API calls.
+// QBank Console — service worker
+// Purpose: (1) satisfy the "has a service worker" requirement browsers use
+// to decide whether a site is installable as an app, and (2) let the app
+// shell (HTML/JS/icons) load instantly offline or on a bad connection.
+//
+// Bump this version string whenever index.html / fb-adapter.js change, so
+// returning users actually get the new file instead of a stale cached copy.
 const CACHE_NAME = 'qbank-console-v1';
 const APP_SHELL = [
   './',
-  './index2.html',
-  './fb-adapter.js',
+  './index.html',
   './manifest.json',
-  './icon-192.png',
-  './icon-512.png',
+  './fb-adapter.js',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
 ];
 
-self.addEventListener('install', (event)=>{
+self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache=> cache.addAll(APP_SHELL)).catch(()=>{})
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(APP_SHELL))
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
-self.addEventListener('activate', (event)=>{
+self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then(keys=>
-      Promise.all(keys.filter(k=>k!==CACHE_NAME).map(k=>caches.delete(k)))
-    )
+    caches.keys()
+      .then((names) => Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-self.addEventListener('fetch', (event)=>{
-  const url = new URL(event.request.url);
-  // Only handle same-origin GET requests for the app shell itself — every
-  // Firebase/Firestore/Cloudinary/Google API call goes straight to the
-  // network untouched, so auth/data is always fresh.
-  if(event.request.method !== 'GET' || url.origin !== self.location.origin) return;
+// Cache-first for same-origin app-shell files. Everything else — Firebase
+// auth/Firestore calls, Cloudinary uploads, CDN libraries (html2canvas,
+// jsPDF, Chart.js, fonts) — goes straight to the network untouched. Caching
+// those would risk serving stale question data, breaking auth, or shipping
+// outdated library code.
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
 
   event.respondWith(
-    caches.match(event.request).then(cached=>{
-      const fetchPromise = fetch(event.request).then(networkRes=>{
-        if(networkRes && networkRes.ok){
-          const clone = networkRes.clone();
-          caches.open(CACHE_NAME).then(cache=> cache.put(event.request, clone));
+    caches.match(req).then((cached) => {
+      const network = fetch(req).then((res) => {
+        if (res && res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
         }
-        return networkRes;
-      }).catch(()=> cached);
-      return cached || fetchPromise;
+        return res;
+      }).catch(() => cached);
+      // Serve cached instantly if we have it (fast + works offline), but
+      // still refresh the cache in the background so the next load is current.
+      return cached || network;
     })
   );
 });
